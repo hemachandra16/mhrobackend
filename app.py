@@ -1,58 +1,35 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options
+from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
 import time
-import json
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend access
 
-# Configure Chrome for headless scraping
-def get_driver():
-    chrome_options = Options()
-    chrome_options.add_argument('--headless')  # Run in background
-    chrome_options.add_argument('--no-sandbox')
-    chrome_options.add_argument('--disable-dev-shm-usage')
-    chrome_options.add_argument('--disable-gpu')
-    chrome_options.add_argument('--window-size=1920,1080')
-    
-    driver = webdriver.Chrome(options=chrome_options)
-    return driver
-
-# Login to Academia SRM
-def login_to_academia(driver, username, password):
+# Login to Academia SRM using Playwright
+def login_to_academia(page, username, password):
     try:
-        driver.get('https://academia.srmist.edu.in/')
+        page.goto('https://academia.srmist.edu.in/')
         
         # Wait for login page to load
-        wait = WebDriverWait(driver, 10)
+        page.wait_for_selector('#txtUserName', timeout=10000)
         
         # Find and fill username
-        username_field = wait.until(
-            EC.presence_of_element_located((By.ID, 'txtUserName'))
-        )
-        username_field.clear()
-        username_field.send_keys(username)
+        page.fill('#txtUserName', username)
         
         # Find and fill password
-        password_field = driver.find_element(By.ID, 'txtPassword')
-        password_field.clear()
-        password_field.send_keys(password)
+        page.fill('#txtPassword', password)
         
         # Click login button
-        login_button = driver.find_element(By.ID, 'btnLogin')
-        login_button.click()
+        page.click('#btnLogin')
         
-        # Wait for dashboard to load
+        # Wait for navigation
         time.sleep(3)
         
         # Check if login was successful
-        if 'student' in driver.current_url.lower() or 'dashboard' in driver.current_url.lower():
+        current_url = page.url.lower()
+        if 'student' in current_url or 'dashboard' in current_url:
             return True, "Login successful"
         else:
             return False, "Invalid credentials"
@@ -61,25 +38,26 @@ def login_to_academia(driver, username, password):
         return False, f"Login error: {str(e)}"
 
 # Scrape attendance data
-def scrape_attendance(driver):
+def scrape_attendance(page):
     try:
         # Navigate to attendance page
-        driver.get('https://academia.srmist.edu.in/#Page:Attendance')
+        page.goto('https://academia.srmist.edu.in/#Page:Attendance')
         time.sleep(3)
         
-        # Get page source and parse with BeautifulSoup
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
+        # Get page content and parse with BeautifulSoup
+        content = page.content()
+        soup = BeautifulSoup(content, 'html.parser')
         
         # Find attendance table
         attendance_data = []
-        table = soup.find('table')  # Adjust selector based on actual page
+        table = soup.find('table')
         
         if table:
             rows = table.find_all('tr')[1:]  # Skip header row
             
             for row in rows:
                 cols = row.find_all('td')
-                if len(cols) >= 7:  # Ensure row has all required columns
+                if len(cols) >= 7:
                     subject_data = {
                         'code': cols[0].text.strip(),
                         'name': cols[1].text.strip(),
@@ -99,13 +77,14 @@ def scrape_attendance(driver):
         return []
 
 # Scrape marks data
-def scrape_marks(driver):
+def scrape_marks(page):
     try:
         # Navigate to marks page
-        driver.get('https://academia.srmist.edu.in/#Page:Marks')
+        page.goto('https://academia.srmist.edu.in/#Page:Marks')
         time.sleep(3)
         
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
+        content = page.content()
+        soup = BeautifulSoup(content, 'html.parser')
         
         marks_data = []
         table = soup.find('table')
@@ -147,27 +126,28 @@ def api_login():
     if not username or not password:
         return jsonify({'error': 'Username and password required'}), 400
     
-    driver = get_driver()
-    
-    try:
-        success, message = login_to_academia(driver, username, password)
-        
-        if success:
-            return jsonify({
-                'success': True,
-                'message': message
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'message': message
-            }), 401
+    with sync_playwright() as p:
+        try:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
             
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-        
-    finally:
-        driver.quit()
+            success, message = login_to_academia(page, username, password)
+            
+            browser.close()
+            
+            if success:
+                return jsonify({
+                    'success': True,
+                    'message': message
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'message': message
+                }), 401
+                
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
 
 @app.route('/api/attendance', methods=['POST'])
 def api_attendance():
@@ -178,29 +158,31 @@ def api_attendance():
     if not username or not password:
         return jsonify({'error': 'Credentials required'}), 400
     
-    driver = get_driver()
-    
-    try:
-        # Login first
-        success, message = login_to_academia(driver, username, password)
-        
-        if not success:
-            return jsonify({'error': f'Login failed: {message}'}), 401
-        
-        # Scrape attendance
-        attendance_data = scrape_attendance(driver)
-        
-        return jsonify({
-            'success': True,
-            'data': attendance_data,
-            'count': len(attendance_data)
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-        
-    finally:
-        driver.quit()
+    with sync_playwright() as p:
+        try:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            
+            # Login first
+            success, message = login_to_academia(page, username, password)
+            
+            if not success:
+                browser.close()
+                return jsonify({'error': f'Login failed: {message}'}), 401
+            
+            # Scrape attendance
+            attendance_data = scrape_attendance(page)
+            
+            browser.close()
+            
+            return jsonify({
+                'success': True,
+                'data': attendance_data,
+                'count': len(attendance_data)
+            })
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
 
 @app.route('/api/marks', methods=['POST'])
 def api_marks():
@@ -211,29 +193,31 @@ def api_marks():
     if not username or not password:
         return jsonify({'error': 'Credentials required'}), 400
     
-    driver = get_driver()
-    
-    try:
-        # Login first
-        success, message = login_to_academia(driver, username, password)
-        
-        if not success:
-            return jsonify({'error': f'Login failed: {message}'}), 401
-        
-        # Scrape marks
-        marks_data = scrape_marks(driver)
-        
-        return jsonify({
-            'success': True,
-            'data': marks_data,
-            'count': len(marks_data)
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-        
-    finally:
-        driver.quit()
+    with sync_playwright() as p:
+        try:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            
+            # Login first
+            success, message = login_to_academia(page, username, password)
+            
+            if not success:
+                browser.close()
+                return jsonify({'error': f'Login failed: {message}'}), 401
+            
+            # Scrape marks
+            marks_data = scrape_marks(page)
+            
+            browser.close()
+            
+            return jsonify({
+                'success': True,
+                'data': marks_data,
+                'count': len(marks_data)
+            })
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     print("🚀 Academia SRM Scraper API starting...")
