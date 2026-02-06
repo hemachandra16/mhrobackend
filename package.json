@@ -1,0 +1,18 @@
+{
+    "name": "srm-academia-backend",
+    "version": "1.0.0",
+    "description": "Backend API for SRM Academia data scraping",
+    "main": "app.js",
+    "scripts": {
+        "start": "node app.js",
+        "dev": "nodemon app.js"
+    },
+    "dependencies": {
+        "express": "^4.18.2",
+        "cors": "^2.8.5",
+        "srm-academia-api": "^1.0.0"
+    },
+    "engines": {
+        "node": ">=14.0.0"
+    }
+}
